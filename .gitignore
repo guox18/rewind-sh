@@ -1,0 +1,16 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# Local environment files
+.env
+.env.*
+
+# Local agent planning files
+task_plan.md
+findings.md
+progress.md
