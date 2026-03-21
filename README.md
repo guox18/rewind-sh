@@ -85,7 +85,7 @@ rewind-sh backend-check --backend auto
 go test -v ./internal/snapshot
 ```
 
-See [TEST_FLOW.md](TEST_FLOW.md) for manual integration checks.
+See [TEST_FLOW.md](TEST_FLOW.md) for the English test flow, and [TEST_FLOW.zh-CN.md](TEST_FLOW.zh-CN.md) for the Chinese version.
 
 ## Roadmap
 
@@ -95,3 +95,9 @@ See [TEST_FLOW.md](TEST_FLOW.md) for manual integration checks.
 - [ ] Complete background process management implementation and tests
 - [ ] Add macOS compatibility
 - [ ] Explore high-performance overlayfs backend in privileged Linux environments
+
+## Delivery Notes
+
+- `--paths` is the recommended primary interface for defining protected scope.
+- `--workdir` and `--monitor-paths` are kept for compatibility.
+- Shell-escape prevention coverage will continue to expand for argument/path variants.
