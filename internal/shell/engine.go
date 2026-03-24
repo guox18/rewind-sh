@@ -17,13 +17,10 @@ import (
 type Config struct {
 	WorkDir      string
 	StateDir     string
-	LogDir       string
 	SessionID    string
 	HistorySize  int
 	Backend      string
 	MonitorPaths []string
-	HeadLines    int
-	TailLines    int
 }
 
 type Engine struct {
@@ -44,17 +41,8 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.StateDir == "" {
 		cfg.StateDir = rewindpath.StateDir(cfg.WorkDir)
 	}
-	if cfg.LogDir == "" {
-		cfg.LogDir = rewindpath.LogsDir(cfg.WorkDir)
-	}
 	if cfg.HistorySize <= 0 {
 		cfg.HistorySize = 100
-	}
-	if cfg.HeadLines <= 0 {
-		cfg.HeadLines = 30
-	}
-	if cfg.TailLines <= 0 {
-		cfg.TailLines = 30
 	}
 	b, err := snapshot.ResolveBackend(cfg.Backend, snapshot.BackendOptions{
 		MonitorPaths: cfg.MonitorPaths,
@@ -70,9 +58,6 @@ func New(cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("后端不可用: %s", reason)
 	}
 	if err = os.MkdirAll(cfg.StateDir, 0o755); err != nil {
-		return nil, err
-	}
-	if err = os.MkdirAll(cfg.LogDir, 0o755); err != nil {
 		return nil, err
 	}
 	if initializer, ok := b.(snapshot.SessionInitializer); ok {
@@ -154,11 +139,8 @@ func (e *Engine) ExecuteCommandIn(cmdText, runDir string) (Record, runner.RunRes
 		StartedAt:  time.Now(),
 	}
 	res, runErr := runner.Run(runner.RunOptions{
-		Command:   cmdText,
-		LogDir:    e.cfg.LogDir,
-		HeadLines: e.cfg.HeadLines,
-		TailLines: e.cfg.TailLines,
-		WorkDir:   absRunDir,
+		Command: cmdText,
+		WorkDir: absRunDir,
 	})
 	rec.EndedAt = time.Now()
 	rec.ExitCode = res.ExitCode

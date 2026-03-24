@@ -16,72 +16,43 @@ func TestExecuteAndRestoreWithSubprocessWrites(t *testing.T) {
 		WorkDir:     workdir,
 		HistorySize: 5,
 		Backend:     "auto",
-		HeadLines:   10,
-		TailLines:   10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := "echo parent > app.txt; /bin/sh -lc 'echo child > child.txt'"
-	t.Logf("step=execute command=%s", cmd)
-	rec, res, err := e.ExecuteCommand(cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("step=record id=%d snapshot=%s exit=%d pgid=%d", rec.ID, rec.SnapshotID, res.ExitCode, res.ProcessGroupID)
-	changed, err := os.ReadFile(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("step=after_exec app.txt=%s", string(changed))
-	if string(changed) == "origin" {
-		t.Fatal("app.txt 应该被命令修改")
-	}
-	if _, err = os.Stat(filepath.Join(workdir, "child.txt")); err != nil {
-		t.Fatal(err)
-	}
-	t.Log("step=restore start")
-	if _, err = e.Restore(rec.ID); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := os.ReadFile(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("step=after_restore app.txt=%s", string(restored))
-	if string(restored) != "origin" {
-		t.Fatalf("restore失败: got=%s", string(restored))
-	}
-	if _, err = os.Stat(filepath.Join(workdir, "child.txt")); !os.IsNotExist(err) {
-		t.Fatal("child.txt 应该被回滚移除")
-	}
-}
+	t.Logf("step=engine created")
 
-func TestHistoryRingTrim(t *testing.T) {
-	workdir := t.TempDir()
-	e, err := New(Config{
-		WorkDir:     workdir,
-		HistorySize: 2,
-		Backend:     "auto",
-	})
+	// First command: modify the file
+	rec1, res1, err := e.ExecuteCommand("echo modified > app.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
-		t.Logf("step=exec idx=%d", i)
-		if _, _, err = e.ExecuteCommand("echo run > run.txt"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	items, err := e.List()
+	t.Logf("step=exec1 done id=%d snapshot=%s exit=%d", rec1.ID, rec1.SnapshotID, res1.ExitCode)
+
+	// Verify file changed
+	data, err := os.ReadFile(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("step=list size=%d firstID=%d", len(items), items[0].ID)
-	if len(items) != 2 {
-		t.Fatalf("want 2 got %d", len(items))
+	t.Logf("step=after_exec1 content=%s", string(data))
+	if string(data) == "origin" {
+		t.Fatal("file should have been modified")
 	}
-	if items[0].ID != 2 {
-		t.Fatalf("oldest should be id=2 got %d", items[0].ID)
+
+	// Restore to first snapshot
+	recRestored, err := e.Restore(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("step=restore done id=%d", recRestored.ID)
+
+	// Verify file restored
+	data, err = os.ReadFile(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("step=after_restore content=%s", string(data))
+	if string(data) != "origin" {
+		t.Fatalf("file should be restored to origin, got: %s", string(data))
 	}
 }

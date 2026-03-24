@@ -119,6 +119,3 @@ func inotifyWatchLimit() int {
 	return n
 }
 
-func formatScopeSummary(info ScopeInfo) string {
-	return fmt.Sprintf("roots=%s watch_used=%d watch_limit=%d scope_log=%s", strings.Join(info.Roots, ","), info.WatchUsed, info.WatchLimit, info.LogFile)
-}

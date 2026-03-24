@@ -18,10 +18,8 @@ import (
 	"rewindsh/internal/checkpoint"
 	"rewindsh/internal/process"
 	"rewindsh/internal/rewindpath"
-	"rewindsh/internal/runner"
 	"rewindsh/internal/shell"
 	"rewindsh/internal/snapshot"
-	"rewindsh/internal/stream"
 )
 
 func Execute(args []string) error {
@@ -37,10 +35,6 @@ func Execute(args []string) error {
 		return rewindListCommand(args[1:])
 	case "rewind-restore":
 		return rewindRestoreCommand(args[1:])
-	case "run":
-		return runCommand(args[1:])
-	case "view":
-		return viewCommand(args[1:])
 	case "checkpoint-create":
 		return checkpointCreate(args[1:])
 	case "checkpoint-restore":
@@ -209,8 +203,7 @@ func shellCommand(args []string) error {
 		if e2 != nil {
 			fmt.Fprintln(os.Stderr, e2.Error())
 		}
-		fmt.Printf("record=%d snapshot=%s log=%s exit=%d pgid=%d\n", rec.ID, rec.SnapshotID, res.LogFile, res.ExitCode, res.ProcessGroupID)
-		printSummary(res.Summary, res.LogFile)
+		fmt.Printf("record=%d snapshot=%s exit=%d pgid=%d\n", rec.ID, rec.SnapshotID, res.ExitCode, res.ProcessGroupID)
 	}
 }
 
@@ -244,8 +237,7 @@ func execCommand(args []string) error {
 		return err
 	}
 	rec, res, err := e.ExecuteCommand(cmdText)
-	fmt.Printf("record=%d snapshot=%s backend=%s log=%s exit=%d\n", rec.ID, rec.SnapshotID, rec.Backend, res.LogFile, res.ExitCode)
-	printSummary(res.Summary, res.LogFile)
+	fmt.Printf("record=%d snapshot=%s backend=%s exit=%d\n", rec.ID, rec.SnapshotID, rec.Backend, res.ExitCode)
 	return err
 }
 
@@ -317,69 +309,6 @@ func rewindRestoreCommand(args []string) error {
 		return err
 	}
 	fmt.Printf("restored id=%d cmd=%s\n", rec.ID, rec.Command)
-	return nil
-}
-
-func runCommand(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	logDir := fs.String("log-dir", rewindpath.LogsDir("."), "日志目录")
-	head := fs.Int("head", 30, "头部保留行数")
-	tail := fs.Int("tail", 30, "尾部保留行数")
-	timeoutSec := fs.Int("timeout", 0, "超时秒数")
-	sliceSec := fs.Int("slice-seconds", 0, "最近时间片秒数")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cmdText := strings.Join(fs.Args(), " ")
-	res, err := runner.Run(runner.RunOptions{
-		Command:      cmdText,
-		LogDir:       *logDir,
-		HeadLines:    *head,
-		TailLines:    *tail,
-		Timeout:      time.Duration(*timeoutSec) * time.Second,
-		SliceSeconds: *sliceSec,
-		WorkDir:      ".",
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("log_file=%s\n", res.LogFile)
-	fmt.Printf("exit_code=%d\n", res.ExitCode)
-	fmt.Printf("total_lines=%d\n", res.Summary.Total)
-	printSummary(res.Summary, res.LogFile)
-	if *sliceSec > 0 {
-		printEvents("slice", res.RecentSlice)
-	}
-	return nil
-}
-
-func viewCommand(args []string) error {
-	fs := flag.NewFlagSet("view", flag.ContinueOnError)
-	file := fs.String("file", "", "日志文件")
-	offset := fs.Int("offset", 0, "开始偏移")
-	limit := fs.Int("limit", 50, "输出行数")
-	cursorFile := fs.String("cursor-file", "", "游标文件")
-	move := fs.Int("move", 0, "游标移动, 正数向下, 负数向上")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*file) == "" {
-		return errors.New("view 需要 --file")
-	}
-	res, err := stream.View(stream.ViewOptions{
-		File:       *file,
-		Offset:     *offset,
-		Limit:      *limit,
-		CursorFile: *cursorFile,
-		Move:       *move,
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("total=%d offset=%d limit=%d\n", res.Total, res.Offset, res.Limit)
-	for i, line := range res.Lines {
-		fmt.Printf("%d\t%s\n", res.Offset+i, line)
-	}
 	return nil
 }
 
@@ -544,7 +473,6 @@ func applySessionConfig(cfg shell.Config, workdir, sessionID string) shell.Confi
 	}
 	cfg.SessionID = sid
 	cfg.StateDir = rewindpath.SessionStateDir(workdir, sid)
-	cfg.LogDir = rewindpath.SessionLogsDir(workdir, sid)
 	return cfg
 }
 
@@ -715,45 +643,6 @@ func formatScopeOutput(scope snapshot.ScopeInfo) string {
 	return fmt.Sprintf("roots=%s watch_used=%d watch_limit=%d scope_log=%s", strings.Join(scope.Roots, ","), scope.WatchUsed, scope.WatchLimit, scope.LogFile)
 }
 
-func printSummary(summary stream.Summary, logFile string) {
-	printEvents("output", summary.Head)
-
-	// 如果总行数大于 head+tail 的行数，说明中间有被截断的内容
-	if summary.Total > len(summary.Head)+len(summary.Tail) {
-		fmt.Printf("\n... (已截断 %d 行，长输出保护) ...\n", summary.Total-len(summary.Head)-len(summary.Tail))
-		fmt.Println("Agent 提示: 当前输出过长已被截断，如果需要查看完整内容或搜索特定信息，请使用如下指令:")
-		fmt.Printf("  rewind-sh view --file %s --offset %d --limit 50\n\n", logFile, len(summary.Head))
-
-		printEvents("tail", summary.Tail)
-	} else if len(summary.Tail) > 0 {
-		// 如果没有截断，但刚好被分配到了 tail 里，也一并打印出来作为普通输出
-		// 实际上 Buffer 的实现如果没截断，应该都在 Head 里，但为了安全兼容
-		for _, e := range summary.Tail {
-			// 查重，避免 head 和 tail 有重叠打印
-			found := false
-			for _, h := range summary.Head {
-				if e == h {
-					found = true
-					break
-				}
-			}
-			if !found {
-				fmt.Printf("%s\t[%s]\t%s\n", e.Time.Format(time.RFC3339), e.Stream, e.Text)
-			}
-		}
-	}
-}
-
-func printEvents(title string, events []stream.Event) {
-	if len(events) == 0 {
-		return
-	}
-	fmt.Printf("[%s]\n", title)
-	for i, e := range events {
-		fmt.Printf("%d\t%s\t[%s]\t%s\n", i, e.Time.Format(time.RFC3339), e.Stream, e.Text)
-	}
-}
-
 func parseRecordID(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -777,8 +666,6 @@ func printUsage() {
 	fmt.Println("  rewind-list --paths <path1[,path2...]> [--session-id <id>]")
 	fmt.Println("  rewind-restore --paths <path1[,path2...]> --id <id> [--session-id <id>]")
 	fmt.Println("  shell 内建: rewind scope")
-	fmt.Println("  run --log-dir <默认用户目录> --head 30 --tail 30 --timeout 0 --slice-seconds 0 <command...>")
-	fmt.Println("  view --file <jsonl> --offset 0 --limit 50 [--cursor-file <cursor-file> --move 20]")
 	fmt.Println("  checkpoint-create --name <name> --files a.txt,b.txt --env PATH,HOME")
 	fmt.Println("  checkpoint-restore --name <name>")
 	fmt.Println("  checkpoint-env --name <name>")

@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,53 +8,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
-
-	"rewindsh/internal/stream"
 )
 
 type RunOptions struct {
-	Command      string
-	WorkDir      string
-	LogDir       string
-	HeadLines    int
-	TailLines    int
-	Timeout      time.Duration
-	SliceSeconds int
+	Command string
+	WorkDir string
+	Timeout time.Duration
 }
 
 type RunResult struct {
-	ExitCode       int            `json:"exit_code"`
-	LogFile        string         `json:"log_file"`
-	Summary        stream.Summary `json:"summary"`
-	RecentSlice    []stream.Event `json:"recent_slice"`
-	RootPID        int            `json:"root_pid"`
-	ProcessGroupID int            `json:"process_group_id"`
+	ExitCode       int `json:"exit_code"`
+	RootPID        int `json:"root_pid"`
+	ProcessGroupID int `json:"process_group_id"`
 }
-
-var errInteractivePrompt = errors.New("检测到命令正在等待交互输入，请改用非交互参数")
 
 func Run(opts RunOptions) (RunResult, error) {
 	if strings.TrimSpace(opts.Command) == "" {
 		return RunResult{}, errors.New("run 命令不能为空")
 	}
-	if opts.HeadLines < 0 || opts.TailLines < 0 {
-		return RunResult{}, errors.New("head/tail 不能为负数")
-	}
 	if looksInteractiveCommand(opts.Command) {
 		return RunResult{}, errors.New("命令需要交互式TTY，当前模式不支持（如 vim/top/less/man）")
 	}
-	if err := ensureDir(opts.LogDir); err != nil {
-		return RunResult{}, err
-	}
-	logFile := filepath.Join(opts.LogDir, time.Now().Format("20060102_150405")+".jsonl")
-	w, err := stream.NewLogWriter(logFile)
-	if err != nil {
-		return RunResult{}, err
-	}
-	defer w.Close()
 
 	baseCtx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -76,15 +51,12 @@ func Run(opts RunOptions) (RunResult, error) {
 
 	applyDropPrivileges(cmd.SysProcAttr)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return RunResult{}, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return RunResult{}, err
-	}
-	if err = cmd.Start(); err != nil {
+	// Pipe directly to console
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	if err := cmd.Start(); err != nil {
 		return RunResult{}, err
 	}
 	rootPID := cmd.Process.Pid
@@ -93,90 +65,17 @@ func Run(opts RunOptions) (RunResult, error) {
 		pgid = g
 	}
 
-	buf := stream.NewBuffer(opts.HeadLines, opts.TailLines)
-	var mu sync.Mutex
-	sliceEvents := make([]stream.Event, 0, 256)
-	pushEvent := func(e stream.Event) error {
-		mu.Lock()
-		defer mu.Unlock()
-		buf.Add(e)
-		if looksPromptForInput(e.Text) {
-			stop()
-			return errInteractivePrompt
-		}
-		if opts.SliceSeconds > 0 {
-			cutoff := time.Now().Add(-time.Duration(opts.SliceSeconds) * time.Second)
-			sliceEvents = append(sliceEvents, e)
-			idx := 0
-			for idx < len(sliceEvents) && sliceEvents[idx].Time.Before(cutoff) {
-				idx++
-			}
-			if idx > 0 {
-				sliceEvents = append([]stream.Event(nil), sliceEvents[idx:]...)
-			}
-		}
-		return w.WriteEvent(e)
-	}
-	readPipe := func(name string, r *bufio.Scanner) error {
-		for r.Scan() {
-			e := stream.Event{
-				Time:   time.Now(),
-				Stream: name,
-				Text:   r.Text(),
-			}
-			if err := pushEvent(e); err != nil {
-				return err
-			}
-		}
-		err := r.Err()
-		if err != nil && strings.Contains(strings.ToLower(err.Error()), "file already closed") {
-			return nil
-		}
-		return err
-	}
-	scOut := bufio.NewScanner(stdout)
-	scOut.Buffer(make([]byte, 0, 1024), 8*1024*1024)
-	scErr := bufio.NewScanner(stderr)
-	scErr.Buffer(make([]byte, 0, 1024), 8*1024*1024)
-
-	var wg sync.WaitGroup
-	var outErr, errErr error
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		outErr = readPipe("stdout", scOut)
-	}()
-	go func() {
-		defer wg.Done()
-		errErr = readPipe("stderr", scErr)
-	}()
-	wg.Wait()
 	waitErr := cmd.Wait()
-	if outErr != nil {
-		return RunResult{}, outErr
-	}
-	if errErr != nil {
-		return RunResult{}, errErr
-	}
 	res := RunResult{
-		LogFile:        logFile,
-		Summary:        buf.Snapshot(),
-		RecentSlice:    sliceEvents,
 		RootPID:        rootPID,
 		ProcessGroupID: pgid,
 	}
 	if waitErr == nil {
-		if errors.Is(outErr, errInteractivePrompt) || errors.Is(errErr, errInteractivePrompt) {
-			return res, errInteractivePrompt
-		}
 		return res, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
 		res.ExitCode = exitErr.ExitCode()
-		if errors.Is(outErr, errInteractivePrompt) || errors.Is(errErr, errInteractivePrompt) {
-			return res, errInteractivePrompt
-		}
 		return res, nil
 	}
 	return RunResult{}, waitErr
@@ -256,31 +155,6 @@ func looksInteractiveCommand(command string) bool {
 	default:
 		return false
 	}
-}
-
-func looksPromptForInput(text string) bool {
-	low := strings.ToLower(strings.TrimSpace(text))
-	if low == "" {
-		return false
-	}
-	markers := []string{
-		"[y/n]", "[y/n]:", "[y/n]?", "[y/n/q]",
-		"[y/N]", "(y/n)", "(yes/no)", "yes/no",
-		"continue?", "proceed?", "accept?",
-		"press enter", "hit enter",
-		"enter choice", "select an option",
-		"password:", "passphrase:",
-	}
-	for _, m := range markers {
-		if strings.Contains(low, strings.ToLower(m)) {
-			return true
-		}
-	}
-	return false
-}
-
-func ensureDir(path string) error {
-	return os.MkdirAll(path, 0o755)
 }
 
 func applyDropPrivileges(attr *syscall.SysProcAttr) {

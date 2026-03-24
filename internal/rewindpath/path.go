@@ -39,10 +39,6 @@ func WorkspaceDir(workdir string) string {
 	return filepath.Join(BaseDir(), "workspaces", fmt.Sprintf("%s-%016x", name, h.Sum64()))
 }
 
-func LogsDir(workdir string) string {
-	return filepath.Join(WorkspaceDir(workdir), "logs")
-}
-
 func StateDir(workdir string) string {
 	return filepath.Join(WorkspaceDir(workdir), "state")
 }
@@ -61,10 +57,6 @@ func SessionDir(workdir, sessionID string) string {
 		sid = "session"
 	}
 	return filepath.Join(WorkspaceDir(workdir), "sessions", sid)
-}
-
-func SessionLogsDir(workdir, sessionID string) string {
-	return filepath.Join(SessionDir(workdir, sessionID), "logs")
 }
 
 func SessionStateDir(workdir, sessionID string) string {

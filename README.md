@@ -13,7 +13,6 @@
 
 `rewind-sh` is not a general-purpose interactive shell. It is an agent-oriented execution wrapper that focuses on:
 - Command-level rollback (filesystem + env snapshots)
-- Output control and readable summaries
 - Process observability for spawned command trees
 - Sparse file tracking with watch + subtree diff
 
@@ -24,7 +23,7 @@ go build -o rewind-sh ./cmd/rewind-sh
 rewind-sh shell --paths ~ --history-size 500 --backend auto
 ```
 
-Each shell start creates a separate session store under `~/.rewind-sh/.../sessions/<session-id>`.  
+Each shell start creates a separate session store under `~/.rewind-sh/.../sessions/<session-id>`.
 You can reuse one explicitly:
 
 ```bash
@@ -35,7 +34,7 @@ rewind-sh shell --paths ~ --session-id 1710912345-abcdef01
 
 ### Rewind Basics
 
-`rewind-sh` snapshots files under protected roots and environment variables before each command.
+`rewind-sh` snapshots files under protected roots and environment variables before each command. Output goes directly to console.
 
 ```bash
 rewind-sh> rm -rf src/
@@ -72,7 +71,7 @@ rewind-sh shell --paths ~/workspace,/mnt/data --backend auto
 
 ## Linux Compatibility
 
-Current backend is Linux-only (`watch-diff`, inotify based).  
+Current backend is Linux-only (`watch-diff`, inotify based).
 `backend-check` helps inspect runtime availability.
 
 ```bash
@@ -90,7 +89,6 @@ See [TEST_FLOW.md](TEST_FLOW.md) for the English test flow, and [TEST_FLOW.zh-CN
 ## Roadmap
 
 - [x] Validate core rewind behavior in Kubernetes Linux containers
-- [ ] Validate output pagination flow in Kubernetes Linux containers
 - [ ] Validate behavior in common Linux distributions
 - [ ] Complete background process management implementation and tests
 - [ ] Add macOS compatibility
